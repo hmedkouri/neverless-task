@@ -24,4 +24,4 @@ jobs:
         build-scan-terms-of-use-agree: "yes"
 
     - name: Run build
-      run: ./gradlew build
+      run: ./gradlew build --info
