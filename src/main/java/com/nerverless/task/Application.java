@@ -50,9 +50,21 @@ public class Application {
         WithdrawalService withdrawalService = new WithdrawalServiceStub();
         WithdrawalWorker withdrawalWorker = buildWithdrawalWorker(dataSource, withdrawalService, withdrawalQueue, withdrawalReportQueue);
 
-        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        ExecutorService executorService = Executors.newFixedThreadPool(3);
         executorService.execute(transactionWorker);
         executorService.execute(withdrawalWorker);
+        // drain the queue to avoid blocking the transaction worker
+        executorService.execute(() -> {
+            while (true) {
+                try {
+                    Report report = transactionReportQueue.take();
+                    logger.info("Transaction report: {}", report);
+                } catch (InterruptedException e) {
+                    logger.error("Error draining transaction report queue", e);
+                    Thread.currentThread().interrupt();
+                }
+            }
+        });
 
         ReportService reportService = new ReportService(dataSource);
         
