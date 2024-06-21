@@ -76,7 +76,7 @@ public class ReportTransactionRepositoryTest {
     @Test
     void findLastByTransactionId_WithValidTransactionId_ReturnsOptionalReportTransaction() throws SQLException {
         // Act
-        Optional<Report> actualReportTransaction = reportTransactionRepository.findLastByTransactionId(transactionId2);
+        Optional<Report> actualReportTransaction = reportTransactionRepository.findLatestByTransactionId(transactionId2);
 
         // Assert
         assertTrue(actualReportTransaction.isPresent());

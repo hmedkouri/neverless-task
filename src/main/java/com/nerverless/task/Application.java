@@ -17,6 +17,8 @@ import com.nerverless.task.model.Transaction;
 import com.nerverless.task.model.Transaction.Transfer;
 import com.nerverless.task.model.Transaction.WithdrawalRequest;
 import com.nerverless.task.model.TransactionId;
+import com.nerverless.task.model.Withdrawal;
+import com.nerverless.task.service.ReportService;
 import com.nerverless.task.service.WithdrawalService;
 import com.nerverless.task.service.WithdrawalServiceStub;
 import com.nerverless.task.workers.TransactionWorker;
@@ -41,7 +43,7 @@ public class Application {
         BlockingQueue<Transaction> transactionQueue = new LinkedBlockingQueue<>();
         BlockingQueue<Report> transactionReportQueue = new LinkedBlockingQueue<>();
         BlockingQueue<Transaction> withdrawalQueue = new LinkedBlockingQueue<>();
-        BlockingQueue<Report> withdrawalReportQueue = new LinkedBlockingQueue<>();
+        BlockingQueue<Withdrawal> withdrawalReportQueue = new LinkedBlockingQueue<>();
 
         TransactionWorker transactionWorker = buildTransactionWorker(dataSource, transactionQueue, transactionReportQueue, withdrawalQueue, withdrawalReportQueue);
 
@@ -52,6 +54,8 @@ public class Application {
         executorService.execute(transactionWorker);
         executorService.execute(withdrawalWorker);
 
+        ReportService reportService = new ReportService(dataSource);
+        
         // Setup Javalin
         Javalin app = Javalin.create(config -> {
             config.staticFiles.add(staticFiles -> {
@@ -61,41 +65,54 @@ public class Application {
 
         // Endpoint to transfer money
         app.post("/transfer", ctx -> {
-            String fromUser = ctx.formParam("fromUser");
-            String toUser = ctx.formParam("toUser");
-            BigDecimal amount = new BigDecimal(ctx.formParam("amount"));
+            try {
+                String fromUser = ctx.formParam("fromUser");
+                String toUser = ctx.formParam("toUser");
+                BigDecimal amount = new BigDecimal(ctx.formParam("amount"));
 
-            Transfer transfer = new Transfer(new TransactionId(UUID.randomUUID(), fromUser), fromUser, toUser, amount);
-            logger.info("Transaction initiated: {}", transfer);
-            transactionQueue.put(transfer);
+                Transfer transfer = new Transfer(new TransactionId(UUID.randomUUID(), fromUser), fromUser, toUser, amount);
+                logger.info("Transaction initiated: {}", transfer);
+                transactionQueue.put(transfer);
 
-            ctx.result("Transaction initiated");
+                ctx.json(String.format("{ 'transation_id':'%s', 'message':'Transfer initiated'}", transfer.transactionId().id()));
+            } catch (IllegalArgumentException e) {
+                ctx.status(422).result(String.format("Invalid request: %s", e.getMessage()));
+            }
         });
 
         // Endpoint to withdraw money to an external account
         app.post("/withdraw", ctx -> {
-            String fromUser = ctx.formParam("fromUser");
-            String toAddress = ctx.formParam("toAddress");
-            BigDecimal amount = new BigDecimal(ctx.formParam("amount"));
+            try {
+                String fromUser = ctx.formParam("fromUser");
+                String toAddress = ctx.formParam("toAddress");
+                BigDecimal amount = new BigDecimal(ctx.formParam("amount"));
 
-            WithdrawalRequest withdrawal = new WithdrawalRequest(new TransactionId(UUID.randomUUID(), fromUser), fromUser, toAddress, amount);
-            logger.info("Withdrawal initiated: {}", withdrawal);
-            transactionQueue.put(withdrawal);
+                WithdrawalRequest withdrawal = new WithdrawalRequest(new TransactionId(UUID.randomUUID(), fromUser), fromUser, toAddress, amount);
+                logger.info("Withdrawal initiated: {}", withdrawal);
+                transactionQueue.put(withdrawal);
 
-            ctx.result("Transaction initiated");
+                ctx.json(String.format("{ 'transation_id':'%s', 'message':'Withdrawal initiated'}", withdrawal.transactionId().id()));
+            } catch (IllegalArgumentException e) {
+                ctx.status(422).result(String.format("Invalid request: %s", e.getMessage()));
+            }
         });
 
         // Endpoint to query transaction status
         app.get("/report", ctx -> {
-            String userId = ctx.queryParam("userId");
-
-            logger.info("Querying report for user: {}", userId);
-
-            Report report = transactionReportQueue.take();
-            if (report.transactionId().userId().equals(userId)) {
-                ctx.json(report);
-            } else {
-                ctx.status(404).result("No report found for user: " + userId);
+            try {
+                String userId = ctx.queryParam("userId");
+                if (userId != null && !userId.isBlank()) {
+                    ctx.json(reportService.getReportsByUser(userId));
+                } else {
+                    String transactionId = ctx.queryParam("transactionId");
+                    if (transactionId != null && !transactionId.isBlank()) {
+                        reportService.getLatestReportByTransaction(UUID.fromString(transactionId)).ifPresentOrElse(ctx::json, () -> ctx.status(422).result("Transaction not found"));
+                    } else {
+                        ctx.status(422).result("userId or transactionId is required");
+                    }
+                }
+            } catch (IllegalArgumentException e) {
+                ctx.status(422).result(String.format("Invalid request: %s", e.getMessage()));
             }
         });
 
@@ -112,12 +129,12 @@ public class Application {
 
     private static TransactionWorker buildTransactionWorker(DataSource dataSource,
         BlockingQueue<Transaction> transactionQueue, BlockingQueue<Report> transactionReportQueue,
-        BlockingQueue<Transaction> withdrawalQueue, BlockingQueue<Report> withdrawalReportQueue) {
+        BlockingQueue<Transaction> withdrawalQueue, BlockingQueue<Withdrawal> withdrawalReportQueue) {
         return new TransactionWorker(dataSource, transactionQueue, transactionReportQueue, withdrawalQueue, withdrawalReportQueue);
     }
 
     private static WithdrawalWorker buildWithdrawalWorker(DataSource dataSource, WithdrawalService withdrawalService, 
-        BlockingQueue<Transaction> withdrawalQueue, BlockingQueue<Report> withdrawalReportQueue) {
+        BlockingQueue<Transaction> withdrawalQueue, BlockingQueue<Withdrawal> withdrawalReportQueue) {
         return new WithdrawalWorker(dataSource, withdrawalService, withdrawalQueue, withdrawalReportQueue);   
     }
 }

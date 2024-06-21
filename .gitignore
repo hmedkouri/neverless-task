@@ -29,3 +29,4 @@ gradle-app.setting
 
 # sqlite database files
 *.db
+!./src/main/resources/db/*.sql

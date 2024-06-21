@@ -11,3 +11,4 @@ CREATE TABLE withdrawal (
 );
 
 CREATE INDEX withdrawal_status_idx ON withdrawal (status);
+CREATE INDEX withdrawal_transaction_id_idx ON withdrawal (transaction_id);

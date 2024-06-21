@@ -4,7 +4,7 @@ import java.math.BigDecimal;
 
 import com.nerverless.task.service.WithdrawalService.WithdrawalId;
 
-public record Withdrawal (WithdrawalId withdrawalId, TransactionId transactionId, String accountName, String toAddress,  BigDecimal amount) implements Transaction {
+public record Withdrawal (WithdrawalId withdrawalId, TransactionId transactionId, String accountName, String toAddress,  BigDecimal amount, TransactionStatus status) implements Transaction {
         public Withdrawal {
             if (withdrawalId == null) {
                 throw new IllegalArgumentException("withdrawalId cannot be null");
@@ -20,6 +20,9 @@ public record Withdrawal (WithdrawalId withdrawalId, TransactionId transactionId
             }
             if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
                 throw new IllegalArgumentException("amount must be greater than zero");
+            }
+            if (status == null) {
+                throw new IllegalArgumentException("status cannot be null");
             }
         }
     }

@@ -1,7 +1,5 @@
 package com.nerverless.task.workers;
 
-import java.sql.Connection;
-import java.sql.SQLException;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -12,33 +10,30 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.nerverless.task.dao.WithdrawalRepository;
-import com.nerverless.task.model.Report;
 import com.nerverless.task.model.Result;
 import com.nerverless.task.model.Transaction;
 import com.nerverless.task.model.Transaction.WithdrawalRequest;
 import com.nerverless.task.model.TransactionStatus;
+import com.nerverless.task.model.Withdrawal;
 import com.nerverless.task.service.WithdrawalService;
-import com.nerverless.task.service.WithdrawalService.WithdrawalState;
 
 public class WithdrawalWorker implements Runnable {
 
     private static final Logger logger = LoggerFactory.getLogger(WithdrawalWorker.class);
 
     private final BlockingQueue<Transaction> withdrawalQueue;
-    private final BlockingQueue<Report> withdrawalReportQueue;
+    private final BlockingQueue<Withdrawal> withdrawalReportQueue;
     private final WithdrawalService withdrawalService;
-    private final DataSource dataSource;
     private final WithdrawalRepository withdrawalRepository;
     private final AtomicBoolean running = new AtomicBoolean(true);
 
     public WithdrawalWorker(DataSource dataSource,
                             WithdrawalService withdrawalService,                            
                             BlockingQueue<Transaction> withdrawalQueue, 
-                            BlockingQueue<Report> withdrawalReportQueue) {
+                            BlockingQueue<Withdrawal> withdrawalReportQueue) {
         this.withdrawalQueue = withdrawalQueue;
         this.withdrawalReportQueue = withdrawalReportQueue;
         this.withdrawalService = withdrawalService;
-        this.dataSource = dataSource;
         this.withdrawalRepository = new WithdrawalRepository(dataSource);
     }
 
@@ -47,10 +42,11 @@ public class WithdrawalWorker implements Runnable {
         while (running.get()) {
             try {
                 Transaction message = withdrawalQueue.poll(1, TimeUnit.SECONDS);
+                logger.trace("Processing message: {}", message);
                 if (message == null) {
                     checkProcessingWithdrwals();
                 } else if (message instanceof WithdrawalRequest withdrawal) {
-                    process(withdrawal);
+                    request(withdrawal);
                 } else {
                     logger.error("Unsupported transaction type: {}", message);
                 }
@@ -65,58 +61,52 @@ public class WithdrawalWorker implements Runnable {
         running.set(false);
     }
 
-    private void process(WithdrawalRequest withdrawal) {
-        try {
-            WithdrawalService.WithdrawalId id = new WithdrawalService.WithdrawalId(withdrawal.transactionId().id());
-            WithdrawalService.Address address = new WithdrawalService.Address(withdrawal.toAddress());
-            withdrawalService.requestWithdrawal(id, address, withdrawal.amount());
-            var report = new Report(withdrawal.transactionId(), withdrawal.amount(), TransactionStatus.PROCESSING, "Withdrawal request sent");
-            send(report);
-        } catch (Exception e) {
-            logger.error("Failed to process withdrawal request: {}", withdrawal, e);
-            var report = new Report(withdrawal.transactionId(), withdrawal.amount(), TransactionStatus.FAILED, "Withdrawal request failed");
-            send(report);
-        }
+    private void request(WithdrawalRequest request) {
+        WithdrawalService.WithdrawalId id = new WithdrawalService.WithdrawalId(request.transactionId().id());
+        WithdrawalService.Address address = new WithdrawalService.Address(request.toAddress());
+        withdrawalService.requestWithdrawal(id, address, request.amount());
+        Withdrawal withdrawal = new Withdrawal(id, request.transactionId(), request.accountName(), request.toAddress(), request.amount(), TransactionStatus.PROCESSING);
+        saveAndSend(withdrawal);
     }
 
-    private void checkProcessingWithdrwals() {
-        try {
-            withdrawalRepository.findProcessing().forEach( withdrawal -> {
-                var result = checkWithdrawal(withdrawal.withdrawalId());
-                var report = new Report(withdrawal.transactionId(), withdrawal.amount(), result.value(), result.message());
-                if (result.value() != TransactionStatus.PROCESSING) {
-                    send(report);
-                }
-            });
-        } catch (SQLException e) {
-            logger.error("Failed to check processing withdrawals", e);
-        }
+    private void checkProcessingWithdrwals() {        
+        withdrawalRepository.findWithStatus(TransactionStatus.PROCESSING).forEach( withdrawal -> {
+            var result = checkWithdrawal(withdrawal);
+            logger.trace("Checking withdrawal: withdrawalId={} - {}", withdrawal.withdrawalId(), result);
+            if (result.value() != TransactionStatus.PROCESSING) {
+                withdrawal = new Withdrawal(withdrawal.withdrawalId(), withdrawal.transactionId(), withdrawal.accountName(), withdrawal.toAddress(), withdrawal.amount(), result.value());
+                saveAndSend(withdrawal);
+            }
+        });
     }
 
-    private void send(Report report) {
+    private void saveAndSend(Withdrawal withdrawal) {
+        withdrawalRepository.save(withdrawal);
+        send(withdrawal);
+    }
+
+    private void send(Withdrawal withdrawal) {
         try {
-            withdrawalReportQueue.put(report);
+            withdrawalReportQueue.put(withdrawal);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
         }
     }
 
-    private Result<TransactionStatus> checkWithdrawal(WithdrawalService.WithdrawalId id) {
-        Result result = new Result<>(TransactionStatus.PROCESSING, "Withdrawal in progress");
-        try (Connection connection = dataSource.getConnection()) {
-            connection.setAutoCommit(false);                        
-            WithdrawalService.WithdrawalState state = withdrawalService.getRequestState(id);
-            if (state == WithdrawalService.WithdrawalState.COMPLETED) {
-                withdrawalRepository.update(id, WithdrawalState.COMPLETED, "Withdrawal completed");
-                result = new Result<>(TransactionStatus.COMPLETED, "Withdrawal completed");
-            } else if (state == WithdrawalService.WithdrawalState.FAILED) {
-                withdrawalRepository.update(id, WithdrawalState.FAILED, "Withdrawal failed");
-                result = new Result<>(TransactionStatus.FAILED, "Withdrawal failed");
-            }
-            connection.commit();            
-        } catch (SQLException e) {            
-            logger.error("Failed to check withdrawal request: {}", id, e);
+    private Result<TransactionStatus> checkWithdrawal(Withdrawal withdrwal) {
+        try {             
+            WithdrawalService.WithdrawalState state = withdrawalService.getRequestState(withdrwal.withdrawalId());
+            if (null == state) {
+                return new Result<>(TransactionStatus.PROCESSING, "Withdrawal in progress");
+            } else return switch (state) {
+                case COMPLETED -> new Result<>(TransactionStatus.COMPLETED, "Withdrawal completed");
+                case FAILED -> new Result<>(TransactionStatus.FAILED, "Withdrawal failed");
+                default -> new Result<>(TransactionStatus.PROCESSING, "Withdrawal in progress");
+            };
+        } catch (IllegalArgumentException e) {
+            logger.error("Failed to request withdrawal state: transactionId={}, withdrawalId={}", withdrwal.transactionId(), withdrwal.withdrawalId(), e);
+            var message = "Withdrawal failed: " + e.getMessage();
+            return new Result<>(TransactionStatus.FAILED, message);
         }
-        return result;
     }
 }

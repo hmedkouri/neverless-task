@@ -18,6 +18,9 @@ public interface Transaction {
             if (toAccountName == null || toAccountName.isBlank()) {
                 throw new IllegalArgumentException("toAccountName cannot be null or empty");
             }
+            if (fromAccountName.equals(toAccountName)) {
+                throw new IllegalArgumentException("fromAccountName and toAccountName cannot be the same");
+            }
             if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
                 throw new IllegalArgumentException("amount must be greater than zero");
             }

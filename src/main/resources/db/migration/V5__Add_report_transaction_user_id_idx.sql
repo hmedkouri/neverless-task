@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS idx_report_transaction_user_id ON report_transaction(user_id);
