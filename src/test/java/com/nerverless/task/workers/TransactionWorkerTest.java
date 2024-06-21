@@ -45,6 +45,8 @@ public class TransactionWorkerTest {
 
         transactionQueue = new LinkedBlockingQueue<>();
         reportQueue = new LinkedBlockingQueue<>();
+        withdrawalQueue = new LinkedBlockingQueue<>();
+        withdrawalReportQueue = new LinkedBlockingQueue<>();
         transactionWorker = new TransactionWorker(connection, userAccountRepository, reportTransactionRepository, transactionQueue, reportQueue, withdrawalQueue, withdrawalReportQueue);
     }
 
