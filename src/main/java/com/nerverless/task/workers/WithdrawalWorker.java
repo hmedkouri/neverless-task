@@ -6,6 +6,8 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import javax.sql.DataSource;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,19 +27,19 @@ public class WithdrawalWorker implements Runnable {
     private final BlockingQueue<Transaction> withdrawalQueue;
     private final BlockingQueue<Report> withdrawalReportQueue;
     private final WithdrawalService withdrawalService;
-    private final Connection connection;
+    private final DataSource dataSource;
     private final WithdrawalRepository withdrawalRepository;
     private final AtomicBoolean running = new AtomicBoolean(true);
 
-    public WithdrawalWorker(WithdrawalService withdrawalService, 
-                            Connection connection,
+    public WithdrawalWorker(DataSource dataSource,
+                            WithdrawalService withdrawalService,                            
                             BlockingQueue<Transaction> withdrawalQueue, 
                             BlockingQueue<Report> withdrawalReportQueue) {
         this.withdrawalQueue = withdrawalQueue;
         this.withdrawalReportQueue = withdrawalReportQueue;
         this.withdrawalService = withdrawalService;
-        this.connection = connection;
-        this.withdrawalRepository = new WithdrawalRepository(connection);
+        this.dataSource = dataSource;
+        this.withdrawalRepository = new WithdrawalRepository(dataSource);
     }
 
     @Override
@@ -46,7 +48,7 @@ public class WithdrawalWorker implements Runnable {
             try {
                 Transaction message = withdrawalQueue.poll(1, TimeUnit.SECONDS);
                 if (message == null) {
-                    checkProcessingWithdrwals(connection);
+                    checkProcessingWithdrwals();
                 } else if (message instanceof WithdrawalRequest withdrawal) {
                     process(withdrawal);
                 } else {
@@ -77,10 +79,10 @@ public class WithdrawalWorker implements Runnable {
         }
     }
 
-    private void checkProcessingWithdrwals(Connection connection) {
+    private void checkProcessingWithdrwals() {
         try {
             withdrawalRepository.findProcessing().forEach( withdrawal -> {
-                var result = checkWithdrawal(withdrawal.withdrawalId(), connection);
+                var result = checkWithdrawal(withdrawal.withdrawalId());
                 var report = new Report(withdrawal.transactionId(), withdrawal.amount(), result.value(), result.message());
                 if (result.value() != TransactionStatus.PROCESSING) {
                     send(report);
@@ -99,9 +101,9 @@ public class WithdrawalWorker implements Runnable {
         }
     }
 
-    private Result<TransactionStatus> checkWithdrawal(WithdrawalService.WithdrawalId id, Connection connection) {
+    private Result<TransactionStatus> checkWithdrawal(WithdrawalService.WithdrawalId id) {
         Result result = new Result<>(TransactionStatus.PROCESSING, "Withdrawal in progress");
-        try {
+        try (Connection connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);                        
             WithdrawalService.WithdrawalState state = withdrawalService.getRequestState(id);
             if (state == WithdrawalService.WithdrawalState.COMPLETED) {
@@ -112,18 +114,8 @@ public class WithdrawalWorker implements Runnable {
                 result = new Result<>(TransactionStatus.FAILED, "Withdrawal failed");
             }
             connection.commit();            
-        } catch (SQLException e) {
-            try {
-                connection.rollback();
-            } catch (SQLException ex) {
-            }
+        } catch (SQLException e) {            
             logger.error("Failed to check withdrawal request: {}", id, e);
-        } finally {
-            try {
-                connection.setAutoCommit(true);
-            } catch (SQLException e) {
-                logger.error("Failed to set auto commit", e);
-            }
         }
         return result;
     }

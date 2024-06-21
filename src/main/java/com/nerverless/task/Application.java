@@ -1,17 +1,17 @@
 package com.nerverless.task;
 
 import java.math.BigDecimal;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.SQLException;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 
+import javax.sql.DataSource;
+
 import org.flywaydb.core.Flyway;
 
+import com.nerverless.task.dao.DatabaseConfig;
 import com.nerverless.task.model.Report;
 import com.nerverless.task.model.Transaction;
 import com.nerverless.task.model.Transaction.Transfer;
@@ -30,86 +30,94 @@ public class Application {
     private static final org.slf4j.Logger logger = org.slf4j.LoggerFactory.getLogger(Application.class);
 
     public static void main(String[] args) {
-        try {
-            Connection connection = DriverManager.getConnection(DB_URL);
 
-            // Initialize the database schema using Flyway
-            Flyway flyway = Flyway.configure().dataSource(DB_URL, null, null).load();
-            flyway.migrate();
+        // Initialize connection pool
+        DataSource dataSource = DatabaseConfig.createDataSource(DB_URL, 3);
 
-            BlockingQueue<Transaction> transactionQueue = new LinkedBlockingQueue<>();
-            BlockingQueue<Report> transactionReportQueue = new LinkedBlockingQueue<>();
-            BlockingQueue<Transaction> withdrawalQueue = new LinkedBlockingQueue<>();
-            BlockingQueue<Report> withdrawalReportQueue = new LinkedBlockingQueue<>();
-            
-            TransactionWorker transactionWorker = new TransactionWorker(connection, transactionQueue, transactionReportQueue, withdrawalQueue, withdrawalReportQueue);
-            
-            WithdrawalService withdrawalService = new WithdrawalServiceStub();
-            WithdrawalWorker withdrawalWorker = new WithdrawalWorker(withdrawalService, connection, withdrawalQueue, withdrawalReportQueue);
+        // Initialize the database schema using Flyway
+        Flyway flyway = Flyway.configure().dataSource(dataSource).load();
+        flyway.migrate();
 
-            ExecutorService executorService = Executors.newFixedThreadPool(2);
-            executorService.execute(transactionWorker);
-            executorService.execute(withdrawalWorker);
+        BlockingQueue<Transaction> transactionQueue = new LinkedBlockingQueue<>();
+        BlockingQueue<Report> transactionReportQueue = new LinkedBlockingQueue<>();
+        BlockingQueue<Transaction> withdrawalQueue = new LinkedBlockingQueue<>();
+        BlockingQueue<Report> withdrawalReportQueue = new LinkedBlockingQueue<>();
 
-            // Setup Javalin
-            Javalin app = Javalin.create(config -> {
-                config.staticFiles.add(staticFiles -> {
-                    staticFiles.directory = "/public";
-                });
-            }).start(7000);
+        TransactionWorker transactionWorker = buildTransactionWorker(dataSource, transactionQueue, transactionReportQueue, withdrawalQueue, withdrawalReportQueue);
 
-            // Endpoint to transfer money
-            app.post("/transfer", ctx -> {
-                String fromUser = ctx.formParam("fromUser");
-                String toUser = ctx.formParam("toUser");
-                BigDecimal amount = new BigDecimal(ctx.formParam("amount"));
+        WithdrawalService withdrawalService = new WithdrawalServiceStub();
+        WithdrawalWorker withdrawalWorker = buildWithdrawalWorker(dataSource, withdrawalService, withdrawalQueue, withdrawalReportQueue);
 
-                Transfer transfer = new Transfer(new TransactionId(UUID.randomUUID(), fromUser), fromUser, toUser, amount);
-                logger.info("Transaction initiated: {}", transfer);
-                transactionQueue.put(transfer);
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        executorService.execute(transactionWorker);
+        executorService.execute(withdrawalWorker);
 
-                ctx.result("Transaction initiated");
+        // Setup Javalin
+        Javalin app = Javalin.create(config -> {
+            config.staticFiles.add(staticFiles -> {
+                staticFiles.directory = "/public";
             });
+        }).start(7000);
 
-            // Endpoint to withdraw money to an external account
-            app.post("/withdraw", ctx -> {
-                String fromUser = ctx.formParam("fromUser");
-                String toAddress = ctx.formParam("toAddress");
-                BigDecimal amount = new BigDecimal(ctx.formParam("amount"));
+        // Endpoint to transfer money
+        app.post("/transfer", ctx -> {
+            String fromUser = ctx.formParam("fromUser");
+            String toUser = ctx.formParam("toUser");
+            BigDecimal amount = new BigDecimal(ctx.formParam("amount"));
 
-                WithdrawalRequest withdrawal = new WithdrawalRequest(new TransactionId(UUID.randomUUID(), fromUser), fromUser, toAddress, amount);
-                logger.info("Withdrawal initiated: {}", withdrawal);
-                transactionQueue.put(withdrawal);
+            Transfer transfer = new Transfer(new TransactionId(UUID.randomUUID(), fromUser), fromUser, toUser, amount);
+            logger.info("Transaction initiated: {}", transfer);
+            transactionQueue.put(transfer);
 
-                ctx.result("Transaction initiated");
-            });
+            ctx.result("Transaction initiated");
+        });
 
-            // Endpoint to query transaction status
-            app.get("/report", ctx -> {
-                String userId = ctx.queryParam("userId");
+        // Endpoint to withdraw money to an external account
+        app.post("/withdraw", ctx -> {
+            String fromUser = ctx.formParam("fromUser");
+            String toAddress = ctx.formParam("toAddress");
+            BigDecimal amount = new BigDecimal(ctx.formParam("amount"));
 
-                logger.info("Querying report for user: {}", userId);
+            WithdrawalRequest withdrawal = new WithdrawalRequest(new TransactionId(UUID.randomUUID(), fromUser), fromUser, toAddress, amount);
+            logger.info("Withdrawal initiated: {}", withdrawal);
+            transactionQueue.put(withdrawal);
 
-                Report report = transactionReportQueue.take();
-                if (report.transactionId().userId().equals(userId)) {
-                    ctx.json(report);
-                } else {
-                    ctx.status(404).result("No report found for user: " + userId);
-                }
-            });
+            ctx.result("Transaction initiated");
+        });
 
-            // Serve the HTML page
-            app.get("/", ctx -> ctx.redirect("/index.html"));
+        // Endpoint to query transaction status
+        app.get("/report", ctx -> {
+            String userId = ctx.queryParam("userId");
 
-            // Graceful shutdown
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                transactionWorker.stop();                
-                executorService.shutdown();
-                app.stop();
-            }));
+            logger.info("Querying report for user: {}", userId);
 
-        } catch (SQLException e) {
-            logger.error("Failed to connect to the database", e);
-        }
+            Report report = transactionReportQueue.take();
+            if (report.transactionId().userId().equals(userId)) {
+                ctx.json(report);
+            } else {
+                ctx.status(404).result("No report found for user: " + userId);
+            }
+        });
+
+        // Serve the HTML page
+        app.get("/", ctx -> ctx.redirect("/index.html"));
+
+        // Graceful shutdown
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            transactionWorker.stop();
+            executorService.shutdown();
+            app.stop();
+        }));
+    }
+
+    private static TransactionWorker buildTransactionWorker(DataSource dataSource,
+        BlockingQueue<Transaction> transactionQueue, BlockingQueue<Report> transactionReportQueue,
+        BlockingQueue<Transaction> withdrawalQueue, BlockingQueue<Report> withdrawalReportQueue) {
+        return new TransactionWorker(dataSource, transactionQueue, transactionReportQueue, withdrawalQueue, withdrawalReportQueue);
+    }
+
+    private static WithdrawalWorker buildWithdrawalWorker(DataSource dataSource, WithdrawalService withdrawalService, 
+        BlockingQueue<Transaction> withdrawalQueue, BlockingQueue<Report> withdrawalReportQueue) {
+        return new WithdrawalWorker(dataSource, withdrawalService, withdrawalQueue, withdrawalReportQueue);   
     }
 }

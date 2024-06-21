@@ -9,6 +9,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+import javax.sql.DataSource;
+
 import com.nerverless.task.model.TransactionId;
 import com.nerverless.task.model.Withdrawal;
 import com.nerverless.task.service.WithdrawalService.Address;
@@ -17,16 +19,17 @@ import com.nerverless.task.service.WithdrawalService.WithdrawalState;
 
 public class WithdrawalRepository {
     
-    private final Connection connection;
+    private final DataSource dataSource;
 
-    public WithdrawalRepository(Connection connection) {
-        this.connection = connection;
+    public WithdrawalRepository(DataSource dataSource) {
+        this.dataSource = dataSource;
     }
 
     // Save withdrawal request
     public void save(WithdrawalId id, TransactionId transactionId, Address address, BigDecimal amount) throws SQLException {
         String sql = "INSERT INTO withdrawal (withdrawal_id, transaction_id, user_id, address, amount) VALUES (?, ?, ?, ?, ?)";
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+        try (Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, id.value().toString());
             statement.setString(2, transactionId.id().toString());
             statement.setString(3, transactionId.userId());
@@ -39,7 +42,8 @@ public class WithdrawalRepository {
     // Update withdrawal request
     public void update(WithdrawalId id, WithdrawalState state, String message) throws SQLException {
         String sql = "UPDATE withdrawal SET status = ?, message = ? WHERE withdrawal_id = ?";
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+        try (Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, state.name());
             statement.setString(2, message);
             statement.setString(3, id.value().toString());
@@ -51,7 +55,8 @@ public class WithdrawalRepository {
     public List<Withdrawal> findProcessing() throws SQLException {
         List<Withdrawal> withdrawals = new ArrayList<>();
         String sql = "SELECT withdrawal_id, transaction_id, user_id, account_name, to_address, amount FROM withdrawal WHERE status = ?";
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+        try (Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, WithdrawalState.PROCESSING.name());
             ResultSet resultSet = statement.executeQuery();
             while (resultSet.next()) {

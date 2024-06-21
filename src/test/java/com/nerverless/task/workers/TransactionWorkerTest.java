@@ -7,6 +7,8 @@ import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 
+import javax.sql.DataSource;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,13 +43,15 @@ public class TransactionWorkerTest {
     public void setUp() throws SQLException {
         userAccountRepository = mock(UserAccountRepository.class);
         reportTransactionRepository = mock(ReportTransactionRepository.class);
+        DataSource dataSource = mock(DataSource.class);
         connection = mock(Connection.class);
+        when(dataSource.getConnection()).thenReturn(connection);
 
         transactionQueue = new LinkedBlockingQueue<>();
         reportQueue = new LinkedBlockingQueue<>();
         withdrawalQueue = new LinkedBlockingQueue<>();
         withdrawalReportQueue = new LinkedBlockingQueue<>();
-        transactionWorker = new TransactionWorker(connection, userAccountRepository, reportTransactionRepository, transactionQueue, reportQueue, withdrawalQueue, withdrawalReportQueue);
+        transactionWorker = new TransactionWorker(dataSource, userAccountRepository, reportTransactionRepository, transactionQueue, reportQueue, withdrawalQueue, withdrawalReportQueue);
     }
 
     @Test
@@ -130,7 +134,8 @@ public class TransactionWorkerTest {
         assertTrue(!report.status().equals(TransactionStatus.COMPLETED));
         assertTrue(report.message().contains("Transaction failed: Database error"));
 
-        verify(connection, times(1)).rollback();
+        verify(connection, times(0)).commit();
+        verify(connection, times(1)).close();
 
         transactionWorker.stop();
         workerThread.interrupt();

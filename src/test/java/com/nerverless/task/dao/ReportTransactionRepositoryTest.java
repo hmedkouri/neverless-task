@@ -3,11 +3,12 @@ package com.nerverless.task.dao;
 import static java.lang.String.format;
 import java.math.BigDecimal;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+
+import javax.sql.DataSource;
 
 import org.flywaydb.core.Flyway;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -27,7 +28,6 @@ import com.nerverless.task.model.TransactionStatus;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 public class ReportTransactionRepositoryTest {
 
-    private Connection connection;
     private ReportTransactionRepository reportTransactionRepository;
     private static final String DB_URL = "jdbc:sqlite:build/tmp/report-test-db.db";
 
@@ -37,21 +37,23 @@ public class ReportTransactionRepositoryTest {
     @BeforeEach
     void setUp() throws SQLException {
         // Setup the database connection        
-        connection = DriverManager.getConnection(DB_URL);
+        DataSource dataSource = DatabaseConfig.createDataSource(DB_URL, 2);
 
         // Initialize the database schema using Flyway
-        Flyway flyway = Flyway.configure().dataSource(DB_URL, null, null)
+        Flyway flyway = Flyway.configure().dataSource(dataSource)
                 .cleanDisabled(false)
                 .load();
         flyway.clean();
         flyway.migrate();
 
         // Insert initial data
-        connection.createStatement().executeUpdate(format("INSERT INTO report_transaction (transaction_id, user_id, status, amount, message) VALUES ('%s', 'User1', 'COMPLETED', 1000, 'Report 1')", transactionId1));
-        connection.createStatement().executeUpdate(format("INSERT INTO report_transaction (transaction_id, user_id, status, amount, message) VALUES ('%s', 'User2', 'PROCESSING', 1000, 'Report 2')", transactionId2));
-        connection.createStatement().executeUpdate(format("INSERT INTO report_transaction (transaction_id, user_id, status, amount, message) VALUES ('%s', 'User2', 'FAILED', 1000, 'Report 3')", transactionId2));
+        try (Connection connection = dataSource.getConnection()) {
+            connection.createStatement().executeUpdate(format("INSERT INTO report_transaction (transaction_id, user_id, status, amount, message) VALUES ('%s', 'User1', 'COMPLETED', 1000, 'Report 1')", transactionId1));
+            connection.createStatement().executeUpdate(format("INSERT INTO report_transaction (transaction_id, user_id, status, amount, message) VALUES ('%s', 'User2', 'PROCESSING', 1000, 'Report 2')", transactionId2));
+            connection.createStatement().executeUpdate(format("INSERT INTO report_transaction (transaction_id, user_id, status, amount, message) VALUES ('%s', 'User2', 'FAILED', 1000, 'Report 3')", transactionId2));
+        }
 
-        reportTransactionRepository = new ReportTransactionRepository(connection);
+        reportTransactionRepository = new ReportTransactionRepository(dataSource);
 
     }
 

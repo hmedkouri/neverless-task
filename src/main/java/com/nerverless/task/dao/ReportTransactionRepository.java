@@ -9,23 +9,26 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import javax.sql.DataSource;
+
 import com.nerverless.task.model.Report;
 import com.nerverless.task.model.TransactionId;
 import com.nerverless.task.model.TransactionStatus;
 
 public class ReportTransactionRepository {
 
-    private final Connection connection;
+    private final DataSource dataSource;
 
-    public ReportTransactionRepository(Connection connection) {
-        this.connection = connection;
+    public ReportTransactionRepository(DataSource dataSource) {
+        this.dataSource = dataSource;
     }
 
     // Find all report report by transactionId ordered by id and created_at desc
     public List<Report> findByTransactionId(UUID transactionId) throws SQLException {
         List<Report> reports = new ArrayList<>();
         String sql = "SELECT transaction_id, user_id, status, amount, message FROM report_transaction WHERE transaction_id = ? ORDER BY created_at, id DESC";
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+        try (Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, transactionId.toString());
             ResultSet resultSet = statement.executeQuery();
             while (resultSet.next()) {
@@ -43,7 +46,8 @@ public class ReportTransactionRepository {
     // Find last report by transactionId if exists
     public Optional<Report> findLastByTransactionId(UUID transactionId) throws SQLException {
         String sql = "SELECT transaction_id, user_id, status, amount, message FROM report_transaction WHERE transaction_id = ? ORDER BY created_at, id DESC LIMIT 1";
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+        try (Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, transactionId.toString());
             ResultSet resultSet = statement.executeQuery();
             if (resultSet.next()) {
@@ -61,7 +65,8 @@ public class ReportTransactionRepository {
     // Insert report transaction
     public void insert(Report report) throws SQLException {
         String sql = "INSERT INTO report_transaction (transaction_id, user_id, status, amount, message) VALUES (?, ?, ?, ?, ?)";
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+        try (Connection connection = dataSource.getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)) {
             statement.setString(1, report.transactionId().id().toString());
             statement.setString(2, report.transactionId().userId());
             statement.setString(3, report.status().name());

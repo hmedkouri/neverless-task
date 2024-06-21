@@ -2,11 +2,11 @@ package com.nerverless.task.dao;
 
 import java.math.BigDecimal;
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.SQLException;
 
+import javax.sql.DataSource;
+
 import org.flywaydb.core.Flyway;
-import org.junit.jupiter.api.AfterAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -22,7 +22,6 @@ import com.nerverless.task.model.UserAccount;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class UserAccountRepositoryTest {
 
-    private Connection connection;
     private UserAccountRepository userAccountRepository;
     private static final String DB_URL = "jdbc:sqlite:build/tmp/test-db.db";
     
@@ -30,28 +29,22 @@ class UserAccountRepositoryTest {
     @BeforeAll
     void setUp() throws SQLException {
         // Setup the database connection        
-        connection = DriverManager.getConnection(DB_URL);
+        DataSource dataSource = DatabaseConfig.createDataSource(DB_URL, 2);
         
         // Initialize the database schema using Flyway
-        Flyway flyway = Flyway.configure().dataSource(DB_URL, null, null)
+        Flyway flyway = Flyway.configure().dataSource(dataSource)
             .cleanDisabled(false)
             .load();        
         flyway.clean();
         flyway.migrate();
         
         // Insert initial data
-        connection.createStatement().executeUpdate("INSERT INTO user_account (name, balance, reserve) VALUES ('User1', 1000, 0)");
-        connection.createStatement().executeUpdate("INSERT INTO user_account (name, balance, reserve) VALUES ('User2', 1000, 0)");
-
-        userAccountRepository = new UserAccountRepository(connection);
-    }
-
-    @AfterAll
-    void tearDown() throws SQLException {
-        // Close the database connection
-        if (connection != null) {
-            connection.close();
+        try (Connection connection = dataSource.getConnection()) {            
+            connection.createStatement().executeUpdate("INSERT INTO user_account (name, balance, reserve) VALUES ('User1', 1000, 0)");
+            connection.createStatement().executeUpdate("INSERT INTO user_account (name, balance, reserve) VALUES ('User2', 1000, 0)");
         }
+
+        userAccountRepository = new UserAccountRepository(dataSource);
     }
 
     @Test

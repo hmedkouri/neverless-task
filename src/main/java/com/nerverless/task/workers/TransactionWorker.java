@@ -5,6 +5,8 @@ import java.sql.SQLException;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import javax.sql.DataSource;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,7 +26,7 @@ public class TransactionWorker implements Runnable {
 
     private final Logger logger = LoggerFactory.getLogger(TransactionWorker.class);
 
-    private final Connection connection;
+    private final DataSource dataSource;
     private final UserAccountRepository userAccountRepository;
     private final ReportTransactionRepository reportTransactionRepository;
 
@@ -35,14 +37,14 @@ public class TransactionWorker implements Runnable {
 
     private final AtomicBoolean running = new AtomicBoolean(true);
 
-    public TransactionWorker(Connection connection,
+    public TransactionWorker(DataSource dataSource,
             BlockingQueue<Transaction> transactionQueue,
             BlockingQueue<Report> transactionReportQueue,
             BlockingQueue<Transaction> withdrawalQueue,
             BlockingQueue<Report> withdrawalReportQueue) {
-        this(connection, 
-            new UserAccountRepository(connection), 
-            new ReportTransactionRepository(connection), 
+        this(dataSource, 
+            new UserAccountRepository(dataSource), 
+            new ReportTransactionRepository(dataSource), 
             transactionQueue, 
             transactionReportQueue, 
             withdrawalQueue, 
@@ -52,7 +54,7 @@ public class TransactionWorker implements Runnable {
     /*
     * For testing purposes this constructor with the repositories is added
      */
-    public TransactionWorker(Connection connection,
+    public TransactionWorker(DataSource dataSource,
             UserAccountRepository userAccountRepository,
             ReportTransactionRepository reportTransactionRepository,
             BlockingQueue<Transaction> transactionQueue,
@@ -60,7 +62,7 @@ public class TransactionWorker implements Runnable {
             BlockingQueue<Transaction> withdrawalQueue,
             BlockingQueue<Report> withdrawalReportQueue) {
 
-        this.connection = connection;
+        this.dataSource = dataSource;
         this.userAccountRepository = userAccountRepository;
         this.reportTransactionRepository = reportTransactionRepository;
 
@@ -118,7 +120,7 @@ public class TransactionWorker implements Runnable {
     }
 
     private Result<TransactionStatus> updateUserAccount(Transfer message) {
-        try {
+        try (Connection connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
 
             // Get user accounts
@@ -138,23 +140,13 @@ public class TransactionWorker implements Runnable {
                 connection.rollback();
                 return new Result<>(FAILED, "Insufficient funds");
             }
-        } catch (SQLException e) {
-            try {
-                connection.rollback();
-            } catch (SQLException ex) {
-            }
+        } catch (SQLException e) {            
             return new Result<>(FAILED, "Transaction failed: " + e.getMessage());
-        } finally {
-            try {
-                connection.setAutoCommit(true);
-            } catch (SQLException e) {
-                logger.error("Failed to set auto commit to true", e);
-            }
         }
     }
 
     private Result<TransactionStatus> updateUserAccount(WithdrawalRequest withdrawal) {
-        try {
+        try (Connection connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
 
             // Get user accounts
@@ -172,18 +164,8 @@ public class TransactionWorker implements Runnable {
                 connection.rollback();
                 return new Result<>(FAILED, "Insufficient funds");
             }
-        } catch (SQLException e) {
-            try {
-                connection.rollback();
-            } catch (SQLException ex) {
-            }
+        } catch (SQLException e) {            
             return new Result<>(FAILED, "Withdrawal failed: " + e.getMessage());
-        } finally {
-            try {
-                connection.setAutoCommit(true);
-            } catch (SQLException e) {
-                logger.error("Failed to set auto commit to true", e);
-            }
         }
     }
 
