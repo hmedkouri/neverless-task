@@ -100,15 +100,15 @@ public class Application {
         // Endpoint to query transaction status
         app.get("/report", ctx -> {
             try {
-                String userId = ctx.queryParam("userId");
-                if (userId != null && !userId.isBlank()) {
-                    ctx.json(reportService.getReportsByUser(userId));
+                String user = ctx.queryParam("user");
+                if (user != null && !user.isBlank()) {
+                    ctx.json(reportService.getReportsByUser(user));
                 } else {
                     String transactionId = ctx.queryParam("transactionId");
                     if (transactionId != null && !transactionId.isBlank()) {
                         reportService.getLatestReportByTransaction(UUID.fromString(transactionId)).ifPresentOrElse(ctx::json, () -> ctx.status(422).result("Transaction not found"));
                     } else {
-                        ctx.status(422).result("userId or transactionId is required");
+                        ctx.status(422).result("user or transactionId is required");
                     }
                 }
             } catch (IllegalArgumentException e) {
